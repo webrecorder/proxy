@@ -1,7 +1,3 @@
-from libmproxy import controller, proxy
-from libmproxy.proxy.server import ProxyServer
-from libmproxy.models import HTTPResponse
-
 from netlib.http import Headers
 from netlib.http.http1.assemble import assemble_request
 from netlib.utils import parse_url
@@ -14,26 +10,32 @@ from six.moves.urllib.parse import quote
 
 from io import BytesIO
 
-import traceback
+import re
+import netlib.utils
+
+netlib.utils._label_valid = re.compile(b"(?!-)[A-Z\d_-]{1,63}(?<!-)$", re.IGNORECASE)
 
 
 #==============================================================================
-class DirectUpstreamController(controller.Master):
-    def __init__(self, server, upstream_url):
-        super(DirectUpstreamController, self).__init__(server)
+class DirectUpstream(object):
+    def __init__(self, upstream_url, default_coll):
         self.upstream_url = upstream_url
         self.loader = ArcWarcRecordLoader()
+        self.default_coll = default_coll
 
-    def handle_request(self, flow):
+    def request(self, flow):
+        flow.request.req_url = None
         self._set_request_url(flow)
-        flow.reply()
 
     def _set_request_url(self, flow, postreq=''):
         req_url = flow.request.scheme + '://' + flow.request.host + flow.request.path
-
         req_url = quote(req_url)
 
-        full_url = self.upstream_url.format(postreq=postreq, url=req_url, closest='now')
+        full_url = self.upstream_url.format(coll=self.default_coll,
+                                            postreq=postreq,
+                                            url=req_url,
+                                            closest='now')
+        print(full_url)
 
         scheme, host, port, path = parse_url(full_url)
 
@@ -44,29 +46,21 @@ class DirectUpstreamController(controller.Master):
 
         flow.request.req_url = req_url
 
-    def handle_responseheaders(self, flow):
+    def responseheaders(self, flow):
         flow.response.stream = True
-        flow.reply()
-        return flow
 
-    def handle_response(self, flow):
+    def response(self, flow):
         an_iter = flow.live.read_response_body(flow.request, flow.response)
         stream = IterIO(an_iter)
-
-        #buff = stream.read()
-        #stream = BytesIO(buff)
-        #stream.seek(0)
-
-        #print('RESPOND', flow.request.req_url)
 
         try:
             self._set_response(stream, flow.response)
         except Exception as e:
-            print(flow.request.req_url)
+            if hasattr(flow.request, 'req_url'):
+                print(flow.request.req_url)
             print(type(e))
             #traceback.print_exc()
 
-        flow.reply()
 
     def _set_response(self, stream, response):
         record = self.loader.parse_record_stream(stream)
@@ -81,32 +75,30 @@ class DirectUpstreamController(controller.Master):
 
         response.stream = StreamIO(record.stream)
 
-    def run(self):
-        try:
-            return controller.Master.run(self)
-        except KeyboardInterrupt:
-            self.shutdown()
-
 
 #==============================================================================
-class PostUpstreamController(DirectUpstreamController):
+class PostUpstream(DirectUpstream):
     POSTREQ_PATH = '/postreq'
 
-    def handle_request(self, flow):
+    PASS_THROUGH = ['Connection']
+
+    def request(self, flow):
         orig_req_data = assemble_request(flow.request)
 
         self._set_request_url(flow, self.POSTREQ_PATH)
 
         headers = Headers()
         headers['Content-Length'] = str(len(orig_req_data))
-        headers['Connection'] = flow.request.headers['Connection']
+
+        for n in self.PASS_THROUGH:
+            val = flow.request.headers.get(n)
+            if val is not None:
+                headers[n] = val
 
         flow.request.method = 'POST'
         flow.request.headers = headers
         flow.request.content = orig_req_data
-
         #print(flow.client_conn.address)
-        flow.reply()
 
 
 #==============================================================================
@@ -123,14 +115,3 @@ class StreamIO(object):
                 break
 
             yield buff
-
-
-#==============================================================================
-if __name__ == "__main__":
-    config = proxy.ProxyConfig(port=9080)
-    server = ProxyServer(config)
-    upstream_url = 'http://localhost:8080/live/resource{postreq}?url={url}&closest={closest}'
-    m = PostUpstreamController(server, upstream_url)
-    m.run()
-
-
