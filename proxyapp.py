@@ -18,10 +18,9 @@ netlib.utils._label_valid = re.compile(b"(?!-)[A-Z\d_-]{1,63}(?<!-)$", re.IGNORE
 
 #==============================================================================
 class DirectUpstream(object):
-    def __init__(self, upstream_url, default_coll):
-        self.upstream_url = upstream_url
+    def __init__(self, upstream_url_resolver):
+        self.upstream_url_resolver = upstream_url_resolver
         self.loader = ArcWarcRecordLoader()
-        self.default_coll = default_coll
 
     def request(self, flow):
         flow.request.req_url = None
@@ -31,11 +30,10 @@ class DirectUpstream(object):
         req_url = flow.request.scheme + '://' + flow.request.host + flow.request.path
         req_url = quote(req_url)
 
-        full_url = self.upstream_url.format(coll=self.default_coll,
-                                            postreq=postreq,
-                                            url=req_url,
-                                            closest='now')
-        print(full_url)
+        full_url = self.upstream_url_resolver(url=req_url,
+                                              headers=flow.request.headers,
+                                              address=flow.client_conn.address,
+                                              postreq=postreq)
 
         scheme, host, port, path = parse_url(full_url)
 
