@@ -12,7 +12,7 @@ from pywb.rewrite.rewrite_amf import RewriteContent
 from pywb.rewrite.wburl import WbUrl
 from pywb.rewrite.url_rewriter import UrlRewriter, SchemeOnlyUrlRewriter
 
-from urlrewrite.templateview import JinjaEnv, HeadInsertView
+from urlrewrite.templateview import JinjaEnv, HeadInsertView, BaseInsertView
 
 from werkzeug.contrib.iterio import IterIO
 
@@ -28,12 +28,6 @@ netlib.utils._label_valid = re.compile(b"(?!-)[A-Z\d_-]{1,63}(?<!-)$", re.IGNORE
 
 #==============================================================================
 class DirectUpstream(object):
-    ERROR_MESSAGE = """
-<html><body><h2>Proxy Error</h2>
-<p>Sorry, the url <b>{0}</b> could not be loaded</p>
-</body></html>
-"""
-
     def __init__(self, upstream_url_resolver,
                  proxy_magic='pywb.proxy',
                  magic_fwd='http://localhost/',
@@ -51,6 +45,7 @@ class DirectUpstream(object):
 
         self.jinja_env = JinjaEnv(globals={'static_path': 'static/__pywb'})
         self.head_insert_view = HeadInsertView(self.jinja_env, 'head_insert.html', 'banner.html')
+        self.error_view = BaseInsertView(self.jinja_env, 'error.html')
 
         if is_rw:
             self.content_rewriter = RewriteContent(is_framed_replay=False)
@@ -128,7 +123,21 @@ class DirectUpstream(object):
             traceback.print_exc()
 
     def send_error(self, flow, url):
-        msg = self.ERROR_MESSAGE.format(url).encode('utf-8')
+        #msg = self.ERROR_MESSAGE.format(url).encode('utf-8')
+
+        template_params = flow.extra_data or {}
+        template_params['url'] = url
+
+        template_params['cdx'] = {'url': url}
+        template_params['proxy_magic'] = self.proxy_magic
+
+        host_prefix = flow.request.req_scheme + '://' + self.proxy_magic
+        template_params['wbrequest'] = {'host_prefix': host_prefix}
+
+        environ = {'pywb_proxy_magic': self.proxy_magic,
+                   'webrec.template_params': template_params}
+
+        msg = self.error_view.render_to_string(environ).encode('utf-8')
 
         flow.response.content = msg
         flow.response.status_code = 400
@@ -147,8 +156,10 @@ class DirectUpstream(object):
 
         cookie_rewriter = None
 
+        template_params = flow.extra_data
+
         environ = {'pywb_proxy_magic': self.proxy_magic,
-                   'webrec.template_params': flow.extra_data}
+                   'webrec.template_params': template_params}
 
         wb_url = WbUrl(url)
         wb_prefix = ''
@@ -169,6 +180,8 @@ class DirectUpstream(object):
         cdx['urlkey'] = urlkey
         cdx['timestamp'] = http_date_to_timestamp(headers.get('Memento-Datetime'))
         cdx['url'] = wb_url.url
+        if headers.get('Webagg-Source-Coll') == 'live':
+            cdx['is_live'] = 'true'
 
         result = self.content_rewriter.rewrite_content(urlrewriter,
                                                record.status_headers,

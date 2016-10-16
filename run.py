@@ -15,6 +15,7 @@ def start():
     parser.add_argument('--host')
     parser.add_argument('--no-rw', dest='is_rw', action='store_false', default=True)
     parser.add_argument('--magic-fwd', help='Forward magic host to target host')
+    parser.add_argument('--proxy-magic', default='pywb.proxy')
     parser.add_argument('--fixed', help='Single Url Resolver')
     parser.add_argument('--redis', help='Redis IP Cache Resolver')
 
@@ -27,7 +28,7 @@ def start():
     elif r.redis:
         resolver = RedisIPCacheResolver(host, r.redis)
 
-    handler = PostUpstream(resolver, is_rw=r.is_rw, magic_fwd=r.magic_fwd)
+    handler = PostUpstream(resolver, is_rw=r.is_rw, proxy_magic=r.proxy_magic, magic_fwd=r.magic_fwd)
 
 def serverconnect(server_conn):
     handler.serverconnect(server_conn)
