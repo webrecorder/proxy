@@ -194,10 +194,27 @@ class DirectUpstream(object):
 
         status_headers, gen, is_rw = result
 
-        status_headers.replace_header('Transfer-Encoding', 'chunked')
+        if status_headers.get_header('X-Archive-Orig-Content-Length'):
+            new_len, gen = self._buffer_response(gen)
+
+            status_headers.headers.append(('Content-Length', str(new_len)))
+
+        else:
+            status_headers.replace_header('Transfer-Encoding', 'chunked')
+
         status_headers.remove_header('Content-Security-Policy')
 
         return status_headers, IterIdent(gen)
+
+    def _buffer_response(self, gen):
+        buff = BytesIO()
+        length = 0
+
+        for val in gen:
+            length += len(val)
+            buff.write(val)
+
+        return length, [buff.getvalue()]
 
     def _set_response(self, flow, stream):
         record = self.loader.parse_record_stream(stream)
