@@ -22,8 +22,13 @@ from io import BytesIO
 
 import re
 import netlib.utils
+from mitmproxy.models import HTTPResponse
 
 netlib.utils._label_valid = re.compile(b"(?!-)[A-Z\d_-]{1,63}(?<!-)$", re.IGNORECASE)
+
+
+H_REFRESH_PATH = '/_homepage'
+H_REDIR_PATH = '/_home_redir'
 
 
 #==============================================================================
@@ -46,6 +51,7 @@ class DirectUpstream(object):
         self.jinja_env = JinjaEnv(globals={'static_path': 'static/__pywb'})
         self.head_insert_view = HeadInsertView(self.jinja_env, 'head_insert.html', 'banner.html')
         self.error_view = BaseInsertView(self.jinja_env, 'error.html')
+        self.home_redir_view = BaseInsertView(self.jinja_env, 'home.html')
 
         if is_rw:
             self.content_rewriter = RewriteContent(is_framed_replay=False)
@@ -60,7 +66,13 @@ class DirectUpstream(object):
         if not host:
             host = flow.request.host
 
-        if host == self.proxy_magic:
+        homepage_redirect = None
+
+        if (host == self.proxy_magic and
+            (flow.request.path in (H_REFRESH_PATH, H_REDIR_PATH))):
+            homepage_redirect = flow.request.path
+
+        elif host == self.proxy_magic:
             flow.request.host = self.fwd_host
             flow.request.scheme = self.fwd_scheme
             flow.request.port = self.fwd_port
@@ -84,6 +96,16 @@ class DirectUpstream(object):
 
         full_url, extra_data = result
 
+        if homepage_redirect:
+            url = extra_data.get('url')
+            if url:
+                if homepage_redirect == H_REFRESH_PATH:
+                    self.homepage_refresh(flow, url)
+                elif homepage_redirect == H_REDIR_PATH:
+                    self.homepage_redir(flow, url)
+
+                return False
+
         scheme, host, port, path = parse(full_url)
 
         flow.request.scheme = scheme
@@ -98,11 +120,17 @@ class DirectUpstream(object):
         if flow.request.host == self.fwd_host:
             return
 
+        if hasattr(flow, 'direct_response'):
+            return
+
         if flow.response.status_code == 200:
             flow.response.stream = True
 
     def response(self, flow):
         if flow.request.host == self.fwd_host:
+            return
+
+        if hasattr(flow, 'direct_response'):
             return
 
         if flow.response.status_code != 200:
@@ -122,10 +150,24 @@ class DirectUpstream(object):
             import traceback
             traceback.print_exc()
 
-    def send_error(self, flow, url):
-        #msg = self.ERROR_MESSAGE.format(url).encode('utf-8')
+    def homepage_redir(self, flow, redir_url):
+        flow.request.host = self.fwd_host
+        flow.response = HTTPResponse.make(303, b'', {'Location': redir_url})
+        return True
 
-        template_params = flow.extra_data or {}
+    def homepage_refresh(self, flow, url):
+        flow.direct_response = True
+        environ = {}
+        environ['webrec.template_params'] = {'url': url}
+        resp_data = self.home_redir_view.render_to_string(environ).encode('utf-8')
+        flow.response = HTTPResponse.make(200, resp_data, {'Content-Type': 'text/html; charset=utf-8'})
+        return True
+
+    def send_error(self, flow, url):
+        template_params = {}
+        if hasattr(flow, 'extra_data') and flow.extra_data:
+            template_params = flow.extra_data
+
         template_params['url'] = url
 
         template_params['cdx'] = {'url': url}
