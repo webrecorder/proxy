@@ -208,6 +208,9 @@ class DirectUpstream(object):
         host_prefix = flow.request.req_scheme + '://' + self.proxy_magic
         urlrewriter = SchemeOnlyUrlRewriter(wb_url, '')
 
+        if flow.request.headers.get('X-Requested-With', '').lower() == 'xmlhttprequest':
+            urlrewriter.rewrite_opts['is_ajax'] = True
+
         head_insert_func = (self.head_insert_view.
                                 create_insert_func(wb_url,
                                                    wb_prefix,
@@ -236,12 +239,13 @@ class DirectUpstream(object):
 
         status_headers, gen, is_rw = result
 
-        if status_headers.get_header('X-Archive-Orig-Content-Length'):
-            new_len, gen = self._buffer_response(gen)
+        #if status_headers.get_header('X-Archive-Orig-Content-Length'):
+        #    new_len, gen = self._buffer_response(gen)
 
-            status_headers.headers.append(('Content-Length', str(new_len)))
+        #    status_headers.headers.append(('Content-Length', str(new_len)))
 
-        else:
+        #else:
+        if status_headers.get_header('Content-Length') is None:
             status_headers.replace_header('Transfer-Encoding', 'chunked')
 
         status_headers.remove_header('Content-Security-Policy')
@@ -292,7 +296,7 @@ class DirectUpstream(object):
 class PostUpstream(DirectUpstream):
     POSTREQ_PATH = '/postreq'
 
-    PASS_THROUGH = ['Connection']
+    PASS_THROUGH = ['Connection', 'X-Requested-With']
 
     def request(self, flow):
         orig_req_data = assemble_request(flow.request)
