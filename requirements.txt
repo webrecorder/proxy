@@ -1,8 +1,0 @@
-#mitmproxy
-#git+https://github.com/mitmproxy/mitmproxy@master#egg=mitmproxy-0.18
-mitmproxy>=0.18
-#werkzeug
-#redis
-#git+https://github.com/ikreymer/pywb.git@develop#egg=pywb-0.32.2-x
-#pywb
-

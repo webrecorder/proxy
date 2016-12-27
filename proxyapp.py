@@ -1,6 +1,6 @@
-from netlib.http import Headers
-from netlib.http.http1.assemble import assemble_request
-from netlib.http.url import parse, hostport
+from mitmproxy.net.http import Headers
+from mitmproxy.net.http.http1.assemble import assemble_request
+from mitmproxy.net.http.url import parse, hostport
 
 from pywb.warc.recordloader import ArcWarcRecordLoader
 from pywb.cdx.cdxobject import CDXObject
@@ -12,7 +12,8 @@ from pywb.rewrite.rewrite_amf import RewriteContent
 from pywb.rewrite.wburl import WbUrl
 from pywb.rewrite.url_rewriter import UrlRewriter, SchemeOnlyUrlRewriter
 
-from urlrewrite.templateview import JinjaEnv, HeadInsertView, BaseInsertView
+from pywb.urlrewrite.templateview import JinjaEnv, HeadInsertView, BaseInsertView
+from pywb.webagg.utils import chunk_encode_iter, buffer_iter
 
 from werkzeug.contrib.iterio import IterIO
 
@@ -21,10 +22,10 @@ from six.moves.urllib.parse import quote, quote_plus
 from io import BytesIO
 
 import re
-import netlib.utils
-from mitmproxy.models import HTTPResponse
+import mitmproxy.net.check
+from mitmproxy.http import HTTPResponse
 
-netlib.utils._label_valid = re.compile(b"(?!-)[A-Z\d_-]{1,63}(?<!-)$", re.IGNORECASE)
+mitmproxy.net.check._label_valid = re.compile(b"(?!-)[A-Z\d_-]{1,63}(?<!-)$", re.IGNORECASE)
 
 
 H_REFRESH_PATH = '/_homepage'
@@ -36,6 +37,7 @@ class DirectUpstream(object):
     def __init__(self, upstream_url_resolver,
                  proxy_magic='pywb.proxy',
                  magic_fwd='http://localhost/',
+                 assets_path=None,
                  is_rw=True):
 
         self.upstream_url_resolver = upstream_url_resolver
@@ -48,7 +50,7 @@ class DirectUpstream(object):
         self.fwd_host = self.fwd_host.decode('latin-1')
         self.fwd_path = self.fwd_path.decode('latin-1')
 
-        self.jinja_env = JinjaEnv(globals={'static_path': 'static/__pywb'})
+        self.jinja_env = JinjaEnv(assets_path=assets_path)
         self.head_insert_view = HeadInsertView(self.jinja_env, 'head_insert.html', 'banner.html')
         self.error_view = BaseInsertView(self.jinja_env, 'error.html')
         self.home_redir_view = BaseInsertView(self.jinja_env, 'home.html')
@@ -146,7 +148,7 @@ class DirectUpstream(object):
         except Exception as e:
             if hasattr(flow.request, 'req_url'):
                 print(flow.request.req_url)
-            print(type(e))
+            print(type(e), e)
             import traceback
             traceback.print_exc()
 
@@ -239,28 +241,25 @@ class DirectUpstream(object):
 
         status_headers, gen, is_rw = result
 
-        #if status_headers.get_header('X-Archive-Orig-Content-Length'):
-        #    new_len, gen = self._buffer_response(gen)
-
-        #    status_headers.headers.append(('Content-Length', str(new_len)))
-
-        #else:
-        if status_headers.get_header('Content-Length') is None:
-            status_headers.replace_header('Transfer-Encoding', 'chunked')
-
         status_headers.remove_header('Content-Security-Policy')
 
+        # check for content-length
+        res = status_headers.get_header('content-length')
+        try:
+            if int(res) > 0:
+                return status_headers, IterIdent(gen)
+        except:
+            pass
+
+        # need to either chunk or buffer to get content-length
+        if flow.request.http_version == 'HTTP/1.1':
+            status_headers.remove_header('content-length')
+            status_headers.headers.append(('Transfer-Encoding', 'chunked'))
+            #gen = chunk_encode_iter(gen)
+        else:
+            gen = buffer_iter(status_headers, gen)
+
         return status_headers, IterIdent(gen)
-
-    def _buffer_response(self, gen):
-        buff = BytesIO()
-        length = 0
-
-        for val in gen:
-            length += len(val)
-            buff.write(val)
-
-        return length, [buff.getvalue()]
 
     def _set_response(self, flow, stream):
         record = self.loader.parse_record_stream(stream)
