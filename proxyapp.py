@@ -2,11 +2,12 @@ from mitmproxy.net.http import Headers
 from mitmproxy.net.http.http1.assemble import assemble_request
 from mitmproxy.net.http.url import parse, hostport
 
-from pywb.warc.recordloader import ArcWarcRecordLoader
+from warcio.recordloader import ArcWarcRecordLoader
+from warcio.timeutils import http_date_to_timestamp
+from warcio.statusandheaders import StatusAndHeaders
+
 from pywb.cdx.cdxobject import CDXObject
 from pywb.utils.canonicalize import canonicalize
-from pywb.utils.timeutils import http_date_to_timestamp
-from pywb.utils.statusandheaders import StatusAndHeaders
 
 from pywb.rewrite.rewrite_amf import RewriteContent
 from pywb.rewrite.wburl import WbUrl
@@ -137,7 +138,13 @@ class DirectUpstream(object):
 
         if flow.response.status_code != 200:
             url = flow.request.req_url
-            self.send_error(flow, url)
+            err_status = 400
+            err_msg = 'Proxy Error'
+            if flow.response.status_code == 404:
+                err_status = 404
+                err_msg = 'Not Found'
+
+            self.send_error(flow, url, err_status, err_msg)
             return
 
         an_iter = flow.live.read_response_body(flow.request, flow.response)
@@ -165,7 +172,7 @@ class DirectUpstream(object):
         flow.response = HTTPResponse.make(200, resp_data, {'Content-Type': 'text/html; charset=utf-8'})
         return True
 
-    def send_error(self, flow, url):
+    def send_error(self, flow, url, status, reason):
         template_params = {}
         if hasattr(flow, 'extra_data') and flow.extra_data:
             template_params = flow.extra_data
@@ -184,8 +191,8 @@ class DirectUpstream(object):
         msg = self.error_view.render_to_string(environ).encode('utf-8')
 
         flow.response.content = msg
-        flow.response.status_code = 400
-        flow.response.reason = 'Proxy Error'
+        flow.response.status_code = status
+        flow.response.reason = reason
         flow.response.headers = Headers()
         flow.response.headers['Content-Type'] = 'text/html; charset=utf-8'
         flow.response.headers['Content-Length'] = str(len(msg))
@@ -196,7 +203,7 @@ class DirectUpstream(object):
         scheme = flow.request.req_scheme
 
         if not self.content_rewriter:
-            return record.status_headers, StreamIO(record.stream)
+            return record.http_headers, StreamIO(record.raw_stream)
 
         cookie_rewriter = None
 
@@ -231,8 +238,8 @@ class DirectUpstream(object):
             cdx['is_live'] = 'true'
 
         result = self.content_rewriter.rewrite_content(urlrewriter,
-                                               record.status_headers,
-                                               record.stream,
+                                               record.http_headers,
+                                               record.raw_stream,
                                                head_insert_func,
                                                urlkey,
                                                cdx,
