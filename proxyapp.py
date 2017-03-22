@@ -9,7 +9,7 @@ from warcio.statusandheaders import StatusAndHeaders
 from pywb.cdx.cdxobject import CDXObject
 from pywb.utils.canonicalize import canonicalize
 
-from pywb.rewrite.rewrite_amf import RewriteContent
+from pywb.urlrewrite.rewriterapp import Rewriter
 from pywb.rewrite.wburl import WbUrl
 from pywb.rewrite.url_rewriter import UrlRewriter, SchemeOnlyUrlRewriter
 
@@ -57,7 +57,7 @@ class DirectUpstream(object):
         self.home_redir_view = BaseInsertView(self.jinja_env, 'home.html')
 
         if is_rw:
-            self.content_rewriter = RewriteContent(is_framed_replay=False)
+            self.content_rewriter = Rewriter(is_framed_replay=False)
         else:
             self.content_rewriter = None
 
